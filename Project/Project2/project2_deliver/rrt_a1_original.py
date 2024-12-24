@@ -18,37 +18,39 @@ model = mujoco.Physics.from_xml_path('assets/a1_rrt.xml')
 
 class RRT:
     class Node:
-        def __init__(self, q):
+        def __init__(self, q):      
+        # 初始化Node实例
             self.q = q
             self.path_q = []
-            self.parent = None
+            self.parent = None        
 
     def __init__(self, start, goal, joint_limits, expand_dis=0.1, path_resolution=0.01, goal_sample_rate=5, max_iter=1000):
-        self.start = self.Node(start) # 起始节点
-        self.end = self.Node(goal)   # 目标节点
-        self.joint_limits = joint_limits  # 关节限制
-        self.expand_dis = expand_dis     # 扩展距离
-        self.path_resolution = path_resolution   # 路径分辨率
-        self.goal_sample_rate = goal_sample_rate  # 目标采样率
-        self.max_iter = max_iter    # 最大迭代次数
-        self.node_list = []        # 节点列表
+        # 属于外部的RRT类，用于初始化RRT类的实例
+        self.start = self.Node(start)
+        self.end = self.Node(goal)
+        self.joint_limits = joint_limits
+        self.expand_dis = expand_dis
+        self.path_resolution = path_resolution
+        self.goal_sample_rate = goal_sample_rate
+        self.max_iter = max_iter
+        self.node_list = []
 
     def planning(self, model):
         self.node_list = [self.start]
         for i in range(self.max_iter):
-            rnd_node = self.get_random_node()
-            nearest_ind = self.get_nearest_node_index(self.node_list, rnd_node)
-            nearest_node = self.node_list[nearest_ind]
+            rnd_node = self.get_random_node()          # 生成随机节点
+            nearest_ind = self.get_nearest_node_index(self.node_list, rnd_node)  # 找到最近的节点的索引
+            nearest_node = self.node_list[nearest_ind]   #获取距离随机节点最近的节点
 
             new_node = self.steer(nearest_node, rnd_node, self.expand_dis)
+            # 通过扩展距离self.expand_dis，从nearest_node到rnd_node生成一个新节点new_node
+            if self.check_collision(new_node, model):   # 检查新节点是否与障碍物碰撞
+                self.node_list.append(new_node)         # 如果没有碰撞，将新节点添加到节点列表中
 
-            if self.check_collision(new_node, model):
-                self.node_list.append(new_node)
-
-            if self.calc_dist_to_goal(self.node_list[-1].q) <= self.expand_dis:
-                final_node = self.steer(self.node_list[-1], self.end, self.expand_dis)
+            if self.calc_dist_to_goal(self.node_list[-1].q) <= self.expand_dis: # 检查最后一个节点是否接近目标
+                final_node = self.steer(self.node_list[-1], self.end, self.expand_dis) # 生成从最后一个节点到目标的路径
                 if self.check_collision(final_node, model):
-                    return self.generate_final_course(len(self.node_list) - 1)
+                    return self.generate_final_course(len(self.node_list) - 1) #生成并返回最终路径
 
         return None
 
@@ -64,10 +66,17 @@ class RRT:
             Index of the nearest node in the node list.
         """
         dlist = [np.linalg.norm(np.array(node.q) - np.array(rnd_node.q)) for node in node_list]
+        # 计算node_list中每个节点到随机节点rnd_node的距离
+        # np.array(node.q)：将节点的关节配置转换为numpy数组
+        # np.linalg.norm：计算两个节点之间的欧氏距离
         min_index = dlist.index(min(dlist))
         return min_index
     
     def steer(self, from_node, to_node, extend_length=float("inf")):
+        """
+         Generate a new node by moving from the 'from_node' towards the 'to_node' by a distance of 'extend_length'.
+         extend_length默认无穷大
+        """
         new_node = self.Node(np.array(from_node.q))
         distance = np.linalg.norm(np.array(to_node.q) - np.array(from_node.q))
         if extend_length > distance:
@@ -78,29 +87,35 @@ class RRT:
         for i in range(num_steps):
             new_q = new_node.q + delta_q * self.path_resolution
             new_node.q = np.clip(new_q, [lim[0] for lim in self.joint_limits], [lim[1] for lim in self.joint_limits])
+            # 将新节点的位置限制在关节限制范围内
             new_node.path_q.append(new_node.q)
+            # 将新节点的位置添加到路径中
 
         new_node.parent = from_node
         return new_node
 
     def get_random_node(self):
         if random.randint(0, 100) > self.goal_sample_rate:
+            # random.randint(0, 100)：生成0到100之间的随机整数
             rand_q = [random.uniform(joint_min, joint_max) for joint_min, joint_max in self.joint_limits]
+            # random.uniform(joint_min, joint_max)：生成joint_min和joint_max之间的随机浮点数
         else:
             rand_q = self.end.q
         return self.Node(rand_q)
+            # rand_q为目标节点的关节配置
 
     def check_collision(self, node, model):
         return check_collision_with_dm_control(model, node.q)
 
     def generate_final_course(self, goal_ind):
-        path = [self.end.q]
-        node = self.node_list[goal_ind]
-        while node.parent is not None:
-            path.append(node.q)
-            node = node.parent
-        path.append(self.start.q)
-        return path[::-1]
+        # goal_ind：目标节点的索引
+        path = [self.end.q]     # 初始化路径列表，将目标节点的关节配置添加到路径中
+        node = self.node_list[goal_ind]  # 获取目标节点
+        while node.parent is not None:   # 循环遍历节点的父节点，直到起始节点（其父节点为None）
+            path.append(node.q)          # 将当前节点的关节配置添加到路径中
+            node = node.parent           # 将当前节点更新为其父节点
+        path.append(self.start.q)        # 将起始节点的关节配置添加到路径中
+        return path[::-1]                # 返回反转后的路径列表，使路径从起点到终点
 
     def calc_dist_to_goal(self, q):
         return np.linalg.norm(np.array(self.end.q) - np.array(q))
@@ -120,6 +135,7 @@ def check_collision_with_dm_control(model, joint_config):
 
     # Check for collisions
     contacts = model.data.ncon  # Number of contacts (collisions)
+    # 获取当前模拟状态下的接触点数量（碰撞数量）
     return contacts == 0  # True if no contacts (collision-free)
 
 
@@ -175,6 +191,8 @@ def apply_rrt_path_to_dm_control(model, path, video_name="rrt_robot_motion.mp4")
 start = [0.5, 1.3, -0.8, -1.5, 0.5, -0.45]  # Start joint angles
 goal = [-0.5, 1.3, -0.8, 1.5, 0.5, 0.45]  # Goal joint angles
 joint_limits = [(-3, 3)] * 6  # Example joint limits
+# 创建一个包含6个元素的列表，每个元素都是一个元组(-3, 3)，表示每个关节的角度限制
+# joint_limits = [(-3, 3), (-3, 3), (-3, 3), (-3, 3), (-3, 3), (-3, 3)]
 joint_limits[2] = (-3, 0) # elbow
 joint_limits[3] = (-1.5, 1.5) # forearm_roll
 
